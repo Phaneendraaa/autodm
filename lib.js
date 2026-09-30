@@ -4,8 +4,10 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { cookies } from 'next/headers';
 export { bcrypt, ObjectId };
-const client = global._m || (global._m = new MongoClient(process.env.MONGODB_URI, { maxPoolSize: 5 }).connect());
-export const db = async () => (await client).db('autodm');
+export const db = async () => {
+  if (!global._m) global._m = new MongoClient(process.env.MONGODB_URI, { maxPoolSize: 5 }).connect();
+  return (await global._m).db('autodm');
+};
 const jk = () => new TextEncoder().encode(process.env.JWT_SECRET);
 export async function setSession(u) {
   const t = await new SignJWT({ id: u.id }).setProtectedHeader({ alg: 'HS256' }).setExpirationTime('7d').sign(jk());
