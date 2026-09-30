@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { q, dec } from '@/lib';
+import { db, dec, ObjectId } from '@/lib';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 export async function GET(r) {
@@ -11,24 +11,27 @@ export async function POST(r) {
   const sig = r.headers.get('x-hub-signature-256') || '';
   const exp = 'sha256=' + crypto.createHmac('sha256', process.env.IG_APP_SECRET).update(raw).digest('hex');
   if (sig.length !== exp.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(exp))) return new Response('bad signature', { status: 401 });
+  const d = await db(), users = d.collection('users'), log = d.collection('dm_log');
   for (const e of JSON.parse(raw).entry || []) for (const c of e.changes || []) {
     if (c.field !== 'comments') continue;
     const v = c.value; if (!v?.id || v.from?.id === e.id) continue;
-    const rules = (await q('select a.id,a.keywords,a.message,a.user_id,i.token from automations a join ig_accounts i on i.user_id=a.user_id where i.ig_id=$1 and a.media_id=$2 and a.active', [e.id, v.media?.id])).rows;
+    const acc = await d.collection('ig_accounts').findOne({ ig_id: e.id }); if (!acc) continue;
+    const rules = await d.collection('automations').find({ user_id: acc.user_id, media_id: v.media?.id, active: true }).toArray();
     const text = (v.text || '').toLowerCase();
     const m = rules.find((x) => x.keywords.some((k) => text.includes(k.toLowerCase()))); if (!m) continue;
-    const ins = await q("insert into dm_log(comment_id,automation_id,status) values($1,$2,'PENDING') on conflict do nothing", [v.id, m.id]);
-    if (!ins.rowCount) continue; // already handled: no double DM, no double charge
-    const d = await q('update users set credits=credits-1 where id=$1 and credits>0', [m.user_id]);
-    if (!d.rowCount) { await q("update dm_log set status='NO_CREDITS' where comment_id=$1", [v.id]); continue; }
+    try { await log.insertOne({ _id: v.id, automation_id: String(m._id), user_id: acc.user_id, status: 'PENDING', created_at: new Date() }); }
+    catch { continue; } // already handled: no double DM, no double charge
+    const uid = new ObjectId(acc.user_id);
+    const dd = await users.updateOne({ _id: uid, credits: { $gt: 0 } }, { $inc: { credits: -1 } });
+    if (!dd.modifiedCount) { await log.updateOne({ _id: v.id }, { $set: { status: 'NO_CREDITS' } }); continue; }
     try {
-      const res = await fetch(`https://graph.instagram.com/v21.0/${e.id}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + dec(m.token) }, body: JSON.stringify({ recipient: { comment_id: v.id }, message: { text: m.message } }) });
+      const res = await fetch(`https://graph.instagram.com/v21.0/${e.id}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + dec(acc.token) }, body: JSON.stringify({ recipient: { comment_id: v.id }, message: { text: m.message } }) });
       if (!res.ok) throw new Error(await res.text());
-      await q("update dm_log set status='SENT' where comment_id=$1", [v.id]);
-      await q('insert into credit_ledger(user_id,delta,reason) values($1,-1,$2)', [m.user_id, 'DM ' + v.id]);
+      await log.updateOne({ _id: v.id }, { $set: { status: 'SENT' } });
+      await d.collection('credit_ledger').insertOne({ user_id: acc.user_id, delta: -1, reason: 'DM ' + v.id, created_at: new Date() });
     } catch (err) {
-      await q('update users set credits=credits+1 where id=$1', [m.user_id]);
-      await q("update dm_log set status='FAILED',error=$2 where comment_id=$1", [v.id, String(err).slice(0, 500)]);
+      await users.updateOne({ _id: uid }, { $inc: { credits: 1 } });
+      await log.updateOne({ _id: v.id }, { $set: { status: 'FAILED', error: String(err).slice(0, 500) } });
     }
   }
   return new Response('ok');

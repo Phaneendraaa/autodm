@@ -1,4 +1,4 @@
-import { q, getUser, enc } from '@/lib';
+import { db, getUser, enc } from '@/lib';
 export const dynamic = 'force-dynamic';
 export async function GET(r) {
   const u = await getUser(); const code = new URL(r.url).searchParams.get('code');
@@ -10,7 +10,7 @@ export async function GET(r) {
   const tok = l.access_token || s.access_token;
   const me = await (await fetch(`https://graph.instagram.com/v21.0/me?fields=user_id,username&access_token=${tok}`)).json();
   const igid = String(me.user_id || s.user_id);
-  await q(`insert into ig_accounts(user_id,ig_id,username,token,expires_at) values($1,$2,$3,$4,now()+interval '60 days') on conflict(user_id) do update set ig_id=$2,username=$3,token=$4,expires_at=now()+interval '60 days'`, [u.id, igid, me.username, enc(tok)]);
+  await (await db()).collection('ig_accounts').updateOne({ user_id: u.id }, { $set: { ig_id: igid, username: me.username, token: enc(tok), expires_at: new Date(Date.now() + 60 * 864e5) } }, { upsert: true });
   await fetch(`https://graph.instagram.com/v21.0/${igid}/subscribed_apps?subscribed_fields=comments&access_token=${tok}`, { method: 'POST' });
   return Response.redirect(process.env.APP_URL + '/dashboard');
 }

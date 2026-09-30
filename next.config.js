@@ -1,1 +1,1 @@
-module.exports={experimental:{serverComponentsExternalPackages:['pg']}}
+module.exports={experimental:{serverComponentsExternalPackages:['mongodb']}}

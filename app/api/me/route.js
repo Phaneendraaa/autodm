@@ -1,9 +1,10 @@
-import { q, getUser } from '@/lib';
+import { db, getUser } from '@/lib';
 export const dynamic = 'force-dynamic';
 export async function GET() {
   const u = await getUser(); if (!u) return Response.json({ error: 'auth' }, { status: 401 });
-  const ig = (await q('select username from ig_accounts where user_id=$1', [u.id])).rows[0] || null;
-  const autos = (await q('select id,media_id,keywords,message from automations where user_id=$1 order by id desc', [u.id])).rows;
-  const log = (await q('select l.comment_id,l.status,l.created_at from dm_log l join automations a on a.id=l.automation_id where a.user_id=$1 order by l.created_at desc limit 10', [u.id])).rows;
+  const d = await db();
+  const ig = await d.collection('ig_accounts').findOne({ user_id: u.id }, { projection: { username: 1, _id: 0 } });
+  const autos = (await d.collection('automations').find({ user_id: u.id }).sort({ _id: -1 }).toArray()).map((a) => ({ id: String(a._id), media_id: a.media_id, keywords: a.keywords, message: a.message }));
+  const log = (await d.collection('dm_log').find({ user_id: u.id }).sort({ created_at: -1 }).limit(10).toArray()).map((l) => ({ comment_id: l._id, status: l.status }));
   return Response.json({ user: u, ig, autos, log });
 }
